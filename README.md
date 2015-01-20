@@ -1,2 +1,2 @@
-# hector_OS
+# Hector_OS
 my personal OS
