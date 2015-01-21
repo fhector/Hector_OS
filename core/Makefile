@@ -1,39 +1,85 @@
+TOOLPATH = ../toolchain/
+INCPATH  = ../toolchain/haribote/
+
+MAKE     = $(TOOLPATH)make.exe -r
+NASK     = $(TOOLPATH)nask.exe
+CC1      = $(TOOLPATH)cc1.exe -I$(INCPATH) -Os -Wall -quiet
+GAS2NASK = $(TOOLPATH)gas2nask.exe -a
+OBJ2BIM  = $(TOOLPATH)obj2bim.exe
+BIM2HRB  = $(TOOLPATH)bim2hrb.exe
+RULEFILE = $(TOOLPATH)haribote/haribote.rul
+EDIMG    = $(TOOLPATH)edimg.exe
+IMGTOL   = $(TOOLPATH)imgtol.com
+COPY     = copy
+DEL      = del
 
 # デフォルト動作
 
 default :
-	../toolchain/make.exe img
+	$(MAKE) img
 
 # ファイル生成規則
 
-ipl.bin : ipl.nas Makefile
-	../toolchain/nask.exe ipl.nas ipl.bin ipl.lst
+ipl10.bin : ipl10.nas Makefile
+	$(NASK) ipl10.nas ipl10.bin ipl10.lst
 
-helloos.img : ipl.bin Makefile
-	../toolchain/edimg.exe   imgin:../toolchain/fdimg0at.tek \
-		wbinimg src:ipl.bin len:512 from:0 to:0   imgout:helloos.img
+asmhead.bin : asmhead.nas Makefile
+	$(NASK) asmhead.nas asmhead.bin asmhead.lst
+
+bootpack.gas : bootpack.c Makefile
+	$(CC1) -o bootpack.gas bootpack.c
+
+bootpack.nas : bootpack.gas Makefile
+	$(GAS2NASK) bootpack.gas bootpack.nas
+
+bootpack.obj : bootpack.nas Makefile
+	$(NASK) bootpack.nas bootpack.obj bootpack.lst
+
+naskfunc.obj : naskfunc.nas Makefile
+	$(NASK) naskfunc.nas naskfunc.obj naskfunc.lst
+
+bootpack.bim : bootpack.obj naskfunc.obj Makefile
+	$(OBJ2BIM) @$(RULEFILE) out:bootpack.bim stack:3136k map:bootpack.map \
+		bootpack.obj naskfunc.obj
+# 3MB+64KB=3136KB
+
+bootpack.hrb : bootpack.bim Makefile
+	$(BIM2HRB) bootpack.bim bootpack.hrb 0
+
+haribote.sys : asmhead.bin bootpack.hrb Makefile
+	copy /B asmhead.bin+bootpack.hrb haribote.sys
+
+haribote.img : ipl10.bin haribote.sys Makefile
+	$(EDIMG)   imgin:../toolchain/fdimg0at.tek \
+		wbinimg src:ipl10.bin len:512 from:0 to:0 \
+		copy from:haribote.sys to:@: \
+		imgout:haribote.img
 
 # コマンド
 
-asm :
-	../toolchain/make.exe -r ipl.bin
-
 img :
-	../toolchain/make.exe -r helloos.img
+	$(MAKE) haribote.img
 
 run :
-	../toolchain/make.exe img
-	copy helloos.img ..\toolchain\qemu\fdimage0.bin
-	../toolchain/make.exe -C ../toolchain/qemu
+	$(MAKE) img
+	$(COPY) haribote.img ..\toolchain\qemu\fdimage0.bin
+	$(MAKE) -C ../toolchain/qemu
 
 install :
-	../toolchain/make.exe img
-	../toolchain/imgtol.com w a: helloos.img
+	$(MAKE) img
+	$(IMGTOL) w a: haribote.img
 
 clean :
-	-del ipl.bin
-	-del ipl.lst
+	-$(DEL) *.bin
+	-$(DEL) *.lst
+	-$(DEL) *.gas
+	-$(DEL) *.obj
+	-$(DEL) bootpack.nas
+	-$(DEL) bootpack.map
+	-$(DEL) bootpack.bim
+	-$(DEL) bootpack.hrb
+	-$(DEL) haribote.sys
 
 src_only :
-	../toolchain/make.exe clean
-	-del helloos.img
+	$(MAKE) clean
+	-$(DEL) haribote.img
