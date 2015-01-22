@@ -1,5 +1,5 @@
 OBJS_BOOTPACK = bootpack.obj naskfunc.obj hankaku.obj graphic.obj dsctbl.obj \
-		int.obj
+		int.obj fifo.obj
 
 TOOLPATH = ../toolchain/
 INCPATH  = ../toolchain/haribote/
@@ -56,7 +56,7 @@ haribote.img : ipl10.bin haribote.sys Makefile
 
 
 
-%.gas : %.c Makefile
+%.gas : %.c bootpack.h Makefile
 	$(CC1) -o $*.gas $*.c
 
 %.nas : %.gas Makefile

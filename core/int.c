@@ -1,6 +1,7 @@
 
 
 #include "bootpack.h"
+#include <stdio.h>
 
 void init_pic(void)
 /* PIC‚initial */
@@ -24,26 +25,31 @@ void init_pic(void)
 	return;
 }
 
+#define PORT_KEYDAT		0x0060
+
+struct FIFO8 keyfifo;
+
 void inthandler21(int *esp)
 /* PS/2 keyboad interrupt handler */
 {
-	struct BOOTINFO *binfo = (struct BOOTINFO *) ADR_BOOTINFO;
-	boxfill8(binfo->vram, binfo->scrnx, COL8_000000, 0, 0, 32 * 8 - 1, 15);
-	putfonts8_asc(binfo->vram, binfo->scrnx, 0, 0, COL8_FFFFFF, "INT 21 (IRQ-1) : PS/2 keyboard");
-	for (;;) {
-		io_hlt();
-	}
+	unsigned char data;
+	io_out8(PIC0_OCW2, 0x61);	/* IRQ-01 receive irq and go on  */
+	data = io_in8(PORT_KEYDAT);
+	fifo8_put(&keyfifo, data);
+	return;
 }
+
+struct FIFO8 mousefifo;
 
 void inthandler2c(int *esp)
 /* PS/2 mouse intrrupt handler */
 {
-	struct BOOTINFO *binfo = (struct BOOTINFO *) ADR_BOOTINFO;
-	boxfill8(binfo->vram, binfo->scrnx, COL8_000000, 0, 0, 32 * 8 - 1, 15);
-	putfonts8_asc(binfo->vram, binfo->scrnx, 0, 0, COL8_FFFFFF, "INT 2C (IRQ-12) : PS/2 mouse");
-	for (;;) {
-		io_hlt();
-	}
+	unsigned char data;
+	io_out8(PIC1_OCW2, 0x64);	/* IRQ-12 inform PIC1  */
+	io_out8(PIC0_OCW2, 0x62);	/* IRQ-02 then (must)inform PIC0 otherwise ignore */
+	data = io_in8(PORT_KEYDAT);
+	fifo8_put(&mousefifo, data);
+	return;
 }
 
 void inthandler27(int *esp)
