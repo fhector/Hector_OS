@@ -1,2 +1,2 @@
 # Hector_OS
-my personal OS
+tracing 30 days Homemade OS
