@@ -3,15 +3,8 @@
 #include "bootpack.h"
 #include <stdio.h>
 
-struct MOUSE_DEC {
-	unsigned char buf[3], phase;
-	int x, y, btn;
-};
-
-extern struct FIFO8 keyfifo, mousefifo;
-void enable_mouse(struct MOUSE_DEC *mdec);
-void init_keyboard(void);
-int mouse_decode(struct MOUSE_DEC *mdec, unsigned char dat);
+unsigned int memtest(unsigned int start, unsigned int end);
+unsigned int memtest_sub(unsigned int start, unsigned int end);
 
 void HariMain(void)
 {
@@ -22,14 +15,15 @@ void HariMain(void)
 
 	init_gdtidt();
 	init_pic();
-	io_sti(); /* IDT/PICの初期化が終わったのでCPUの割り込み禁止を解除 */
+	io_sti(); /* IDT/PIC initial finish, and so CPU sti*/
 
 	fifo8_init(&keyfifo, 32, keybuf);
 	fifo8_init(&mousefifo, 128, mousebuf);
-	io_out8(PIC0_IMR, 0xf9); /* PIC1とキーボードを許可(11111001) */
-	io_out8(PIC1_IMR, 0xef); /* マウスを許可(11101111) */
+	io_out8(PIC0_IMR, 0xf9); /* set PIC1& keyboard(11111001) */
+	io_out8(PIC1_IMR, 0xef); /* set mouse(11101111) */
 
 	init_keyboard();
+	enable_mouse(&mdec);
 
 	init_palette();
 	init_screen8(binfo->vram, binfo->scrnx, binfo->scrny);
@@ -40,7 +34,9 @@ void HariMain(void)
 	sprintf(s, "(%3d, %3d)", mx, my);
 	putfonts8_asc(binfo->vram, binfo->scrnx, 0, 0, COL8_FFFFFF, s);
 
-	enable_mouse(&mdec);
+	i = memtest(0x00400000, 0xbfffffff) / (1024 * 1024);
+	sprintf(s, "memory %dMB", i);
+	putfonts8_asc(binfo->vram, binfo->scrnx, 0, 32, COL8_FFFFFF, s);
 
 	for (;;) {
 		io_cli();
@@ -96,88 +92,60 @@ void HariMain(void)
 	}
 }
 
-#define PORT_KEYDAT				0x0060
-#define PORT_KEYSTA				0x0064
-#define PORT_KEYCMD				0x0064
-#define KEYSTA_SEND_NOTREADY	0x02
-#define KEYCMD_WRITE_MODE		0x60
-#define KBC_MODE				0x47
+#define EFLAGS_AC_BIT		0x00040000
+#define CR0_CACHE_DISABLE	0x60000000
 
-void wait_KBC_sendready(void)
+unsigned int memtest(unsigned int start, unsigned int end)
 {
-	/* KeyBoardControler send to ready*/
-	for (;;) {
-		if ((io_in8(PORT_KEYSTA) & KEYSTA_SEND_NOTREADY) == 0) {
+	char flg486 = 0;
+	unsigned int eflg, cr0, i;
+
+	/* confirm CPU is 386 or 486 + */
+	eflg = io_load_eflags();
+	eflg |= EFLAGS_AC_BIT; /* AC-bit = 1 */
+	io_store_eflags(eflg);
+	eflg = io_load_eflags();
+	if ((eflg & EFLAGS_AC_BIT) != 0) { /* fi 386, even if set AC=1, AC value will still be 0  */
+		flg486 = 1;
+	}
+	eflg &= ~EFLAGS_AC_BIT; /* AC-bit = 0 */
+	io_store_eflags(eflg);
+
+	if (flg486 != 0) {
+		cr0 = load_cr0();
+		cr0 |= CR0_CACHE_DISABLE; /* Prohibit the cache */
+		store_cr0(cr0);
+	}
+
+	i = memtest_sub(start, end);
+
+	if (flg486 != 0) {
+		cr0 = load_cr0();
+		cr0 &= ~CR0_CACHE_DISABLE; /*allow the cache  */
+		store_cr0(cr0);
+	}
+
+	return i;
+}
+
+unsigned int memtest_sub(unsigned int start, unsigned int end)
+{
+	unsigned int i, *p, old, pat0 = 0xaa55aa55, pat1 = 0x55aa55aa;
+	for (i = start; i <= end; i += 0x1000) {
+		p = (unsigned int *) (i + 0xffc);
+		old = *p;				/* save the vaule before modify */
+		*p = pat0;			/* try write */
+		*p ^= 0xffffffff;	/* reversal */
+		if (*p != pat1) {		/* check the reversal result */
+not_memory:
+			*p = old;
 			break;
 		}
-	}
-	return;
-}
-
-void init_keyboard(void)
-{
-	/* KBC initial */
-	wait_KBC_sendready();
-	io_out8(PORT_KEYCMD, KEYCMD_WRITE_MODE);
-	wait_KBC_sendready();
-	io_out8(PORT_KEYDAT, KBC_MODE);
-	return;
-}
-
-#define KEYCMD_SENDTO_MOUSE		0xd4
-#define MOUSECMD_ENABLE			0xf4
-
-void enable_mouse(struct MOUSE_DEC *mdec)
-{
-	/*  enable mouse */
-	wait_KBC_sendready();
-	io_out8(PORT_KEYCMD, KEYCMD_SENDTO_MOUSE);
-	wait_KBC_sendready();
-	io_out8(PORT_KEYDAT, MOUSECMD_ENABLE);
-/* success return ACK(0xfa)*/
-	mdec->phase = 0; /* oxfa, mouse waiting */
-	return; 
-}
-
-int mouse_decode(struct MOUSE_DEC *mdec, unsigned char dat)
-{
-	if (mdec->phase == 0) {
-		/* status 0xfa, wating */
-		if (dat == 0xfa) {
-			mdec->phase = 1;
+		*p ^= 0xffffffff;	/* reversal again */
+		if (*p != pat0) {	/* check the vaule whether resume*/
+			goto not_memory;
 		}
-		return 0;
+		*p = old;			/* resume the value */
 	}
-	if (mdec->phase == 1) {
-		/* 1st  */
-		if ((dat & 0xc8) == 0x08) {
-			/* guarantee true */
-			mdec->buf[0] = dat;
-			mdec->phase = 2;
-		}
-		return 0;
-	}
-	if (mdec->phase == 2) {
-		/* 2nd */
-		mdec->buf[1] = dat;
-		mdec->phase = 3;
-		return 0;
-	}
-	if (mdec->phase == 3) {
-		/* 3th */
-		mdec->buf[2] = dat;
-		mdec->phase = 1;
-		mdec->btn = mdec->buf[0] & 0x07;
-		mdec->x = mdec->buf[1];
-		mdec->y = mdec->buf[2];
-		if ((mdec->buf[0] & 0x10) != 0) {
-			mdec->x |= 0xffffff00;
-		}
-		if ((mdec->buf[0] & 0x20) != 0) {
-			mdec->y |= 0xffffff00;
-		}
-		mdec->y = - mdec->y; /* mouse opposite direction to Graphics */
-		return 1;
-	}
-	return -1; /* usually not error */
+	return i;
 }

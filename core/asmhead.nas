@@ -37,13 +37,18 @@ VRAM	EQU		0x0ff8			; グラフィックバッファの開始番地
 ;	PICの初期化はあとでやる
 
 		MOV		AL,0xff
-		OUT		0x21,AL
-		NOP						; OUT命令を連続させるとうまくいかない機種があるらしいので
-		OUT		0xa1,AL
+		OUT		0x21,AL			; Prohibit master PIC interrupt
+		NOP						; some machine can not out then out,so add nop opration
+		OUT		0xa1,AL			; Prohibit slave PIC interrupt
 
-		CLI						; さらにCPUレベルでも割り込み禁止
+		CLI						; Prohibit the CPU interrupt
+; equivalence
+;io_out(	PIC0_IMR,	0XFF)
+;io_out(	PIC0_IMR,	0XFF);
+;io_cli();
 
-; CPUから1MB以上のメモリにアクセスできるように、A20GATEを設定
+
+; for CPU can access mm > 1MB, set A20GATE
 
 		CALL	waitkbdout
 		MOV		AL,0xd1
@@ -53,72 +58,80 @@ VRAM	EQU		0x0ff8			; グラフィックバッファの開始番地
 		OUT		0x60,AL
 		CALL	waitkbdout
 
-; プロテクトモード移行
+;Switch to protected mode
 
-[INSTRSET "i486p"]				; 486の命令まで使いたいという記述
+[INSTRSET "i486p"]				; Want to use the 486 instructions eg. LGDT,EAX,CR0
 
-		LGDT	[GDTR0]			; 暫定GDTを設定
-		MOV		EAX,CR0
-		AND		EAX,0x7fffffff	; bit31を0にする（ページング禁止のため）
-		OR		EAX,0x00000001	; bit0を1にする（プロテクトモード移行のため）
+		LGDT	[GDTR0]			; set temp GDT
+		MOV		EAX,CR0			; Control Register 0
+		AND		EAX,0x7fffffff		; bit 31 =0
+		OR		EAX,0x00000001	; set bit 0 =1 for switch to protected mode
 		MOV		CR0,EAX
 		JMP		pipelineflush
 pipelineflush:
-		MOV		AX,1*8			;  読み書き可能セグメント32bit
+		MOV		AX,1*8			; WR segment 32bit    0x0008
 		MOV		DS,AX
 		MOV		ES,AX
 		MOV		FS,AX
 		MOV		GS,AX
-		MOV		SS,AX
+		MOV		SS,AX			; except CS,  0x0008 means "gtd+1" segment
 
-; bootpackの転送
+;transfer bootpack
 
-		MOV		ESI,bootpack	; 転送元
-		MOV		EDI,BOTPAK		; 転送先
+		MOV		ESI,bootpack		; source
+		MOV		EDI,BOTPAK		; destination
 		MOV		ECX,512*1024/4
 		CALL	memcpy
 
-; ついでにディスクデータも本来の位置へ転送
+;Disk data eventually transferred to its original position
 
-; まずはブートセクタから
+;First of all, starting from the boot sector
 
-		MOV		ESI,0x7c00		; 転送元
-		MOV		EDI,DSKCAC		; 転送先
+		MOV		ESI,0x7c00		; source
+		MOV		EDI,DSKCAC		; destination
 		MOV		ECX,512/4
 		CALL	memcpy
 
-; 残り全部
+; All remaining
 
-		MOV		ESI,DSKCAC0+512	; 転送元
-		MOV		EDI,DSKCAC+512	; 転送先
+		MOV		ESI,DSKCAC0+512	;
+		MOV		EDI,DSKCAC+512	; 
 		MOV		ECX,0
 		MOV		CL,BYTE [CYLS]
-		IMUL	ECX,512*18*2/4	; シリンダ数からバイト数/4に変換
-		SUB		ECX,512/4		; IPLの分だけ差し引く
+		IMUL	ECX,512*18*2/4	; From the cylinder number transform for the number of bytes/4
+		SUB		ECX,512/4		; minus IPL
 		CALL	memcpy
 
-; asmheadでしなければいけないことは全部し終わったので、
-;	あとはbootpackに任せる
+; equivalence
+;memcpy(bootpack,	BOTPAK, 		512*512/4	);
+;memcpy(0x7c00,		BOTPAK, 		512/4		);
+;memcpy(DSKCAC0,	DSKCAC+512, CYLS*512*18*2/4-512/4);
 
-; bootpackの起動
+
+
+
+; the work must do by asmhead have been finished.
+; Now to bootpack to deal with
+
+; bootpack starts
 
 		MOV		EBX,BOTPAK
 		MOV		ECX,[EBX+16]
 		ADD		ECX,3			; ECX += 3;
 		SHR		ECX,2			; ECX /= 4;
-		JZ		skip			; 転送するべきものがない
-		MOV		ESI,[EBX+20]	; 転送元
+		JZ		skip				; noting to transmit
+		MOV		ESI,[EBX+20]		; source
 		ADD		ESI,EBX
-		MOV		EDI,[EBX+12]	; 転送先
+		MOV		EDI,[EBX+12]		; destination
 		CALL	memcpy
 skip:
-		MOV		ESP,[EBX+12]	; スタック初期値
+		MOV		ESP,[EBX+12]		; stack initial value
 		JMP		DWORD 2*8:0x0000001b
 
 waitkbdout:
 		IN		 AL,0x64
 		AND		 AL,0x02
-		JNZ		waitkbdout		; ANDの結果が0でなければwaitkbdoutへ
+		JNZ		waitkbdout		; AND result if not 0, jump waitkbdout
 		RET
 
 memcpy:
@@ -127,15 +140,15 @@ memcpy:
 		MOV		[EDI],EAX
 		ADD		EDI,4
 		SUB		ECX,1
-		JNZ		memcpy			; 引き算した結果が0でなければmemcpyへ
+		JNZ		memcpy			; 
 		RET
-; memcpyはアドレスサイズプリフィクスを入れ忘れなければ、ストリング命令でも書ける
+; memcpy
 
 		ALIGNB	16
 GDT0:
-		RESB	8				; ヌルセレクタ
-		DW		0xffff,0x0000,0x9200,0x00cf	; 読み書き可能セグメント32bit
-		DW		0xffff,0x0000,0x9a28,0x0047	; 実行可能セグメント32bit（bootpack用）
+		RESB	8				; NULL selector  (the number 0 segment)
+		DW		0xffff,0x0000,0x9200,0x00cf	; Read&Write segment 32bit
+		DW		0xffff,0x0000,0x9a28,0x0047	; Execute segment 32bit (for bootpack  use)
 
 		DW		0
 GDTR0:
