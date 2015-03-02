@@ -144,10 +144,10 @@ int memman_free_4k(struct MEMMAN *man, unsigned int addr, unsigned int size);
 #define MAX_SHEETS		256
 struct SHEET {
 	unsigned char *buf;
-	int bxsize, bysize, vx0, vy0, col_inv, height, flags;
+	int bxsize, bysize, vx0, vy0, col_inv, height, flags;    /*color_invisable*/
 	struct SHTCTL *ctl;};
-struct SHTCTL{
-	unsigned char *vram;
+struct SHTCTL {
+	unsigned char *vram, *map;
 	int xsize,ysize,top;
 	struct SHEET *sheets[MAX_SHEETS];
 	struct SHEET sheets0[MAX_SHEETS];
